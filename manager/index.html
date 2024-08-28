@@ -1,0 +1,490 @@
+<!-- this is to schedule the videos and export that as list.json -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Scheduler</title>
+    <link href='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/main.min.css' rel='stylesheet' />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #controls {
+            background-color: #f0f0f0;
+            padding: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #main-content {
+            display: flex;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        #calendar {
+            flex-grow: 1;
+            padding: 20px;
+            overflow: auto;
+        }
+
+        #sidebar {
+            width: 300px;
+            padding: 20px;
+            background-color: #f0f0f0;
+            border-left: 1px solid #ccc;
+            box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+
+        #sidebar h3 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        #search-bar {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        .video-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #e0e0e0;
+            cursor: move;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+            display: flex;
+            align-items: center;
+            position: relative;
+        }
+
+        .video-item:hover {
+            background-color: #d0d0d0;
+        }
+
+        .video-item img {
+            width: 100px;
+            margin-right: 10px;
+        }
+
+        .delete-video {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background-color: #ff4444;
+            color: white;
+            cursor: pointer;
+        }
+
+        .delete-video:hover {
+            background-color: #cc0000;
+        }
+
+        .fc-timegrid-slot {
+            height: 2em !important;
+        }
+
+        .fc .fc-timegrid-slot-minor {
+            border-top-style: none;
+        }
+
+        .delete-event {
+            position: absolute;
+            top: 0px;
+            right: 0px;
+            background-color: rgba(255, 255, 255, 0.7);
+            color: #f00;
+            cursor: pointer;
+            z-index: 1000;
+        }
+
+        .delete-event:hover {
+            background-color: rgba(255, 0, 0, 0.7);
+            color: #fff;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="controls">
+        <input type="password" id="github-token" placeholder="GitHub Personal Access Token">
+        <input type="text" id="gist-id" placeholder="Gist ID (leave empty for new Gist)">
+        <button id="export-button">Export to Gist</button>
+        <button id="import-button">Import from Clipboard</button>
+        <button id="clear-all-events-button">Clear all events</button>
+    </div>
+    <div id="main-content">
+        <div id="calendar"></div>
+        <div id="sidebar">
+            <h3>Videos</h3>
+            <input type="text" id="search-bar" placeholder="Search videos...">
+            <div id="video-list"></div>
+        </div>
+    </div>
+
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js'></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var calendarEl = document.getElementById('calendar');
+            let closestEventStartTime = null;
+            let closestEventEndTime = null;
+
+            var calendar = new FullCalendar.Calendar(calendarEl, {
+                initialView: 'timeGridWeek',
+                slotDuration: '00:15:00',
+                slotMinTime: '10:00:00',
+                slotMaxTime: '19:00:00',
+                slotLabelInterval: '01:00:00',
+                // businessHours: {
+                //     // days of week. an array of zero-based day of week integers (0=Sunday)
+                //     daysOfWeek: [ 0, 1, 2, 3, 4, 5, 6 ], // Monday - Thursday
+                //     startTime: '10:00', // a start time (10am in this example)
+                //     endTime: '19:00', // an end time (6pm in this example)
+                // },
+                // eventConstraint: "businessHours",
+                slotLabelFormat: {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    omitZeroMinute: false,
+                    meridiem: 'short'
+                },
+                nowIndicator: true,
+                snapDuration: '00:00:01',
+                editable: true,
+                droppable: true,
+                slotEventOverlap: false,
+                selectOverlap: false,
+                height: '100%',
+                headerToolbar: {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'timeGridWeek'
+                },
+                eventDurationEditable: false,
+                allDaySlot: false,
+                eventTimeFormat: {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    meridiem: 'short'
+                },
+                eventOverlap: function(stillEvent, movingEvent) {
+                    const topGap = Math.abs(stillEvent.start.getTime() - movingEvent.end.getTime());
+                    const bottomGap = Math.abs(stillEvent.end.getTime() - movingEvent.start.getTime());
+                    const snapThreshold = 60*1000; // 1 second in milliseconds
+
+                    // close to top
+                    if (topGap <= snapThreshold) {
+                        closestEventStartTime = stillEvent.start.getTime();
+                        closestEventEndTime = null;
+                    }
+
+                    // close to bottom
+                    else if (bottomGap <= snapThreshold) {
+                        closestEventStartTime = null;
+                        closestEventEndTime = stillEvent.end.getTime();
+                    }
+
+                    return false;
+                },
+                eventDragStop: function(info) {
+                    // snap to top
+                    if (closestEventStartTime) {
+                        let duration = info.event.end.getTime() - info.event.start.getTime();
+                        let newEnd = closestEventStartTime - 1000;
+                        let newStart = newEnd - duration;
+                        info.event.setStart(newStart);
+                        info.event.setEnd(newEnd);
+                    }
+                    // snap to bottom
+                    else if (closestEventEndTime) {
+                        let duration = info.event.end.getTime() - info.event.start.getTime();
+                        let newStart = closestEventEndTime + 1000;
+                        let newEnd = newStart + duration;
+                        info.event.setStart(newStart);
+                        info.event.setEnd(newEnd);
+                    }
+                },
+                eventDidMount: function (info) {
+                    updateTitle(info);
+                },
+                eventContent: function (arg) {
+                    let title = arg.event.title;
+                    let thumbnail = arg.event.extendedProps.thumbnail;
+                    return {
+                        html: `<div class="fc-event-main-frame">
+                                  <div class="delete-event">×</div>
+                                  <img src="${thumbnail}" style="width:50px;float:left;margin-right:5px;">
+                                  <div>
+                                    <div class="fc-event-title fc-sticky">${title}</div>
+                                  </div>
+                                </div>`
+                    };
+                },
+                eventDrop: function (info) {
+                    adjustEventTime(info.event);
+                    updateTitle(info);
+                    saveScheduledVideos();
+                },
+                eventResize: function (info) {
+                    adjustEventTime(info.event);
+                    saveScheduledVideos();
+                },
+                eventAdd: function (info) {
+                    saveScheduledVideos();
+                },
+                eventChange: function (info) {
+                    saveScheduledVideos();
+                },
+                eventRemove: function (info) {
+                    saveScheduledVideos();
+                },
+                eventsSet: function (eventsArray) {
+                    saveScheduledVideos();
+                },
+            });
+
+            calendar.on('eventClick', function(info) {
+                if (info.jsEvent.target.className === 'delete-event') {
+                    info.event.remove();
+                }
+            });
+
+            // Load scheduled videos from localStorage
+            var savedEvents = JSON.parse(localStorage.getItem('scheduledVideos') || '[]');
+            savedEvents.forEach(event => {
+                event.start = new Date(event.start);
+                event.end = new Date(event.end);
+                calendar.addEvent(event);
+            });
+
+            calendar.render();
+
+            function moveEventFromEndTime(event, endTime) {
+            }
+
+            function updateTitle(info) {
+                if (info.event.start && info.event.end) {
+                    info.el.title = 'Start: ' 
+                    + info.event.start.toLocaleString() 
+                    + '\nEnd: ' + info.event.end.toLocaleString();
+                }
+            }
+
+            function adjustEventTime(event) {
+                let start = event.start;
+                let end = event.end;
+                let duration = (end - start) / 1000; // duration in seconds
+                event.setExtendedProp('duration', duration);
+            }
+
+            function saveScheduledVideos() {
+                var events = calendar.getEvents().map(event => ({
+                    title: event.title,
+                    start: event.start,
+                    end: event.end,
+                    extendedProps: event.extendedProps
+                }));
+                localStorage.setItem('scheduledVideos', JSON.stringify(events));
+            }
+
+            // Load imported videos from localStorage
+            var importedVideos = JSON.parse(localStorage.getItem('importedVideos') || '[]');
+            renderVideoList(importedVideos);
+
+            document.getElementById('import-button').addEventListener('click', async function () {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    const videos = JSON.parse(text);
+
+                    // Merge new videos with existing ones, avoiding duplicates
+                    videos.forEach(video => {
+                        if (!importedVideos.some(v => v.id === video.id)) {
+                            importedVideos.push(video);
+                        }
+                    });
+
+                    // Save updated list to localStorage
+                    localStorage.setItem('importedVideos', JSON.stringify(importedVideos));
+
+                    // Render updated list
+                    renderVideoList(importedVideos);
+                } catch (err) {
+                    console.error('Failed to read clipboard contents: ', err);
+                }
+            });
+
+            document.getElementById('clear-all-events-button').addEventListener('click', function () {
+                calendar.getEvents().forEach(event => {
+                    event.remove();
+                });
+                saveScheduledVideos();
+            });
+
+            document.getElementById('export-button').addEventListener('click', async function () {
+                const githubToken = document.getElementById('github-token').value;
+                const gistId = document.getElementById('gist-id').value;
+
+                if (!githubToken) {
+                    alert('Please enter your GitHub Personal Access Token');
+                    return;
+                }
+
+                const events = calendar.getEvents();
+                const exportData = {
+                    "1": {} // We're using channel 1 as default
+                };
+
+                events.forEach((event, index) => {
+                    const playAt = Math.floor(event.start.getTime() / 1000); // Convert to Unix timestamp
+                    exportData["1"][index + 1] = {
+                        id: event.extendedProps.videoId,
+                        playAt: playAt,
+                        duration: event.extendedProps.duration
+                    };
+                });
+
+                // Sort the events by playAt time
+                const sortedChannel = Object.fromEntries(
+                    Object.entries(exportData["1"]).sort(([, a], [, b]) => a.playAt - b.playAt)
+                );
+                exportData["1"] = sortedChannel;
+
+                const jsonString = JSON.stringify(exportData, null, 2);
+
+                const gistData = {
+                    description: "Video Schedule Export",
+                    public: false,
+                    files: {
+                        "list.json": {
+                            content: jsonString
+                        }
+                    }
+                };
+
+                try {
+                    let response;
+                    if (gistId) {
+                        // Update existing Gist
+                        response = await fetch(`https://api.github.com/gists/${gistId}`, {
+                            method: 'PATCH',
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(gistData)
+                        });
+                    } else {
+                        // Create new Gist
+                        response = await fetch('https://api.github.com/gists', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(gistData)
+                        });
+                    }
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    alert(`Gist ${gistId ? 'updated' : 'created'} successfully. Gist ID: ${result.id}`);
+
+                    // Update the Gist ID input field with the new ID if a new Gist was created
+                    if (!gistId) {
+                        document.getElementById('gist-id').value = result.id;
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Failed to create/update Gist. Check console for details.');
+                }
+            });
+
+            function renderVideoList(videos) {
+                const videoList = document.getElementById('video-list');
+                videoList.innerHTML = '';
+                videos.forEach(video => {
+                    const videoItem = document.createElement('div');
+                    videoItem.className = 'video-item';
+                    videoItem.innerHTML = `
+                        <img src="${video.thumbnail}" alt="${video.title}">
+                        <div class="video-info">
+                            <strong>${video.title}</strong><br>
+                            Duration: ${formatDuration(video.duration)}
+                        </div>
+                        <button class="delete-video" data-id="${video.id}">×</button>
+                    `;
+                    videoList.appendChild(videoItem);
+
+                    new FullCalendar.Draggable(videoItem, {
+                        eventData: function () {
+                            return {
+                                title: video.title,
+                                duration: { seconds: video.duration },
+                                extendedProps: {
+                                    thumbnail: video.thumbnail,
+                                    videoId: video.id,
+                                    duration: video.duration
+                                }
+                            };
+                        }
+                    });
+                });
+
+                // Add event listeners for delete buttons
+                document.querySelectorAll('.delete-video').forEach(button => {
+                    button.addEventListener('click', function(e) {
+                        e.stopPropagation(); // Prevent dragging when clicking delete
+                        const videoId = this.getAttribute('data-id');
+                        deleteVideo(videoId);
+                    });
+                });
+            }
+
+            function deleteVideo(videoId) {
+                importedVideos = importedVideos.filter(video => video.id !== videoId);
+                localStorage.setItem('importedVideos', JSON.stringify(importedVideos));
+                renderVideoList(importedVideos);
+            }
+
+            function searchVideos(query) {
+                const filteredVideos = importedVideos.filter(video => 
+                    video.title.toLowerCase().includes(query.toLowerCase())
+                );
+                renderVideoList(filteredVideos);
+            }
+
+            // Add event listener for search bar
+            document.getElementById('search-bar').addEventListener('input', function(e) {
+                searchVideos(e.target.value);
+            });
+
+            function formatDuration(seconds) {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                const remainingSeconds = seconds % 60;
+                return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+            }
+        });
+    </script>
+</body>
+
+</html>
