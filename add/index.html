@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add to YTCH</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#111111">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, sans-serif;
+            background: #111;
+            color: #eee;
+            min-height: 100vh;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        h1 { font-size: 1.2rem; font-weight: 600; color: #ff4444; }
+        label { font-size: 0.8rem; color: #888; display: block; margin-bottom: 0.3rem; }
+        input, select {
+            width: 100%;
+            background: #222;
+            border: 1px solid #333;
+            color: #eee;
+            border-radius: 6px;
+            padding: 0.7rem;
+            font-size: 1rem;
+        }
+        input:focus, select:focus { outline: none; border-color: #ff4444; }
+        .card {
+            background: #1a1a1a;
+            border-radius: 10px;
+            padding: 1rem;
+            display: flex;
+            gap: 0.8rem;
+            align-items: flex-start;
+        }
+        .card img { width: 120px; height: 67px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+        .card-info { flex: 1; overflow: hidden; }
+        .card-title { font-size: 0.9rem; margin-bottom: 0.3rem; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+        .card-duration { font-size: 0.8rem; color: #888; }
+        button {
+            width: 100%;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.9rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button:disabled { background: #555; cursor: not-allowed; }
+        .settings { background: #1a1a1a; border-radius: 10px; padding: 1rem; display: flex; flex-direction: column; gap: 0.7rem; }
+        .settings summary { cursor: pointer; font-size: 0.9rem; color: #888; }
+        .toast {
+            position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+            background: #222; color: #eee; padding: 0.7rem 1.2rem;
+            border-radius: 100px; font-size: 0.9rem; opacity: 0;
+            transition: opacity 0.3s; pointer-events: none; white-space: nowrap;
+        }
+        .toast.show { opacity: 1; }
+        .row { display: flex; gap: 0.7rem; }
+        .row > * { flex: 1; }
+        #preview { display: none; }
+        #add-btn { display: none; }
+        #ch-row { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Add to YTCH</h1>
+
+    <div>
+        <label>YouTube URL</label>
+        <input type="url" id="url-input" placeholder="https://youtube.com/watch?v=..." autocomplete="off">
+    </div>
+
+    <div id="preview" class="card">
+        <img id="thumb" src="" alt="">
+        <div class="card-info">
+            <div class="card-title" id="vid-title">Loading…</div>
+            <div class="card-duration" id="vid-duration"></div>
+        </div>
+    </div>
+
+    <div id="ch-row" class="row">
+        <div>
+            <label>Channel</label>
+            <select id="ch-select"></select>
+        </div>
+    </div>
+
+    <button id="add-btn" disabled>Add to TV</button>
+
+    <details class="settings">
+        <summary>⚙ Settings</summary>
+        <div style="margin-top:0.7rem; display:flex; flex-direction:column; gap:0.7rem;">
+            <div>
+                <label>GitHub PAT</label>
+                <input type="password" id="pat-input" placeholder="ghp_...">
+            </div>
+            <div>
+                <label>Gist ID</label>
+                <input type="text" id="gist-input" placeholder="e.g. 63a62ae38897f7e1691c78811470e97a">
+            </div>
+            <button onclick="saveSettings()" style="background:#333">Save Settings</button>
+        </div>
+    </details>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const CHANNELS = [
+            [1,"Science & Technology"],[2,"Travel & Events"],[3,"Food"],
+            [4,"Architecture"],[5,"Film & Animation"],[6,"Documentaries"],
+            [7,"Comedy"],[8,"Music"],[9,"Autos & Vehicles"],[10,"News"],
+            [11,"UFC"],[12,"Podcasts"],[13,"Gaming"],[14,"Literature"],
+            [15,"Cooking"],[16,"Short Films"],[17,"Game Shows"],[18,"Cartoons"],[19,"Baseball"]
+        ];
+
+        const urlInput = document.getElementById("url-input");
+        const preview = document.getElementById("preview");
+        const thumb = document.getElementById("thumb");
+        const vidTitle = document.getElementById("vid-title");
+        const vidDuration = document.getElementById("vid-duration");
+        const chRow = document.getElementById("ch-row");
+        const chSelect = document.getElementById("ch-select");
+        const addBtn = document.getElementById("add-btn");
+
+        let currentVideo = null;
+
+        // Populate channel picker
+        CHANNELS.forEach(([n, name]) => {
+            const opt = document.createElement("option");
+            opt.value = n;
+            opt.textContent = `CH ${n} — ${name}`;
+            chSelect.appendChild(opt);
+        });
+
+        // Restore last used channel
+        const lastCh = localStorage.getItem("addLastCh");
+        if (lastCh) chSelect.value = lastCh;
+
+        // Settings
+        function loadSettings() {
+            document.getElementById("pat-input").value = localStorage.getItem("ytch_pat") || "";
+            document.getElementById("gist-input").value = localStorage.getItem("ytch_gist") || "";
+        }
+        function saveSettings() {
+            localStorage.setItem("ytch_pat", document.getElementById("pat-input").value.trim());
+            localStorage.setItem("ytch_gist", document.getElementById("gist-input").value.trim());
+            showToast("Settings saved");
+        }
+        loadSettings();
+
+        // Extract video ID from various YouTube URL formats
+        function extractId(url) {
+            try {
+                const u = new URL(url);
+                if (u.hostname.includes("youtu.be")) return u.pathname.slice(1).split("?")[0];
+                return u.searchParams.get("v");
+            } catch { return null; }
+        }
+
+        function parseDuration(iso) {
+            // PT4M35S → seconds
+            const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+            if (!m) return null;
+            return (parseInt(m[1] || 0) * 3600) + (parseInt(m[2] || 0) * 60) + parseInt(m[3] || 0);
+        }
+
+        function fmtDuration(s) {
+            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+            if (h > 0) return `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+            return `${m}:${String(sec).padStart(2,"0")}`;
+        }
+
+        async function fetchVideoInfo(videoId) {
+            currentVideo = null;
+            addBtn.disabled = true;
+            preview.style.display = "flex";
+            chRow.style.display = "flex";
+            addBtn.style.display = "block";
+            vidTitle.textContent = "Loading…";
+            vidDuration.textContent = "";
+            thumb.src = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+            try {
+                // oEmbed for title
+                const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+                const oeData = await oe.json();
+                vidTitle.textContent = oeData.title;
+
+                // Fetch page via CORS proxy for duration
+                let duration = null;
+                try {
+                    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent("https://www.youtube.com/watch?v=" + videoId)}`;
+                    const pageRes = await fetch(proxyUrl);
+                    const html = await pageRes.text();
+                    const match = html.match(/"duration"\s*:\s*"(PT[^"]+)"/);
+                    if (match) duration = parseDuration(match[1]);
+                } catch {}
+
+                vidDuration.textContent = duration ? fmtDuration(duration) : "Duration unknown";
+
+                currentVideo = {
+                    id: videoId,
+                    title: oeData.title,
+                    thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                    duration: duration
+                };
+                addBtn.disabled = false;
+            } catch (err) {
+                vidTitle.textContent = "Could not load video info";
+                console.error(err);
+            }
+        }
+
+        let debounce;
+        urlInput.addEventListener("input", () => {
+            clearTimeout(debounce);
+            debounce = setTimeout(() => {
+                const id = extractId(urlInput.value.trim());
+                if (id) fetchVideoInfo(id);
+            }, 500);
+        });
+
+        addBtn.addEventListener("click", async () => {
+            if (!currentVideo) return;
+            const pat = localStorage.getItem("ytch_pat");
+            const gistId = localStorage.getItem("ytch_gist");
+            if (!pat || !gistId) { showToast("Set GitHub PAT and Gist ID in Settings first"); return; }
+
+            addBtn.disabled = true;
+            addBtn.textContent = "Adding…";
+            const ch = Number(chSelect.value);
+            localStorage.setItem("addLastCh", ch);
+
+            try {
+                // Fetch current pool
+                const gistRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+                    headers: { "Authorization": `token ${pat}`, "Accept": "application/vnd.github.v3+json" }
+                });
+                if (!gistRes.ok) throw new Error("Failed to fetch Gist");
+                const gistData = await gistRes.json();
+                const poolFile = gistData.files["pool.json"];
+                let pool = poolFile ? JSON.parse(poolFile.content) : {};
+
+                // Ensure channel exists
+                if (!pool[ch]) pool[ch] = { slots: [{ name: "all", start: "00:00", end: "23:59", minDuration: null, maxDuration: null }], pool: [] };
+
+                // Avoid duplicates
+                if (!pool[ch].pool.some(v => v.id === currentVideo.id)) {
+                    pool[ch].pool.push(currentVideo);
+                }
+
+                // Save back
+                const patchRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+                    method: "PATCH",
+                    headers: {
+                        "Authorization": `token ${pat}`,
+                        "Content-Type": "application/json",
+                        "Accept": "application/vnd.github.v3+json"
+                    },
+                    body: JSON.stringify({ files: { "pool.json": { content: JSON.stringify(pool, null, 2) } } })
+                });
+                if (!patchRes.ok) throw new Error("Failed to update Gist");
+
+                const chName = CHANNELS.find(c => c[0] === ch)?.[1] || `CH ${ch}`;
+                showToast(`✓ Added to ${chName}`);
+                addBtn.textContent = "Added ✓";
+            } catch (err) {
+                console.error(err);
+                showToast("Error: " + err.message);
+                addBtn.disabled = false;
+                addBtn.textContent = "Add to TV";
+            }
+        });
+
+        function showToast(msg) {
+            const t = document.getElementById("toast");
+            t.textContent = msg;
+            t.classList.add("show");
+            setTimeout(() => t.classList.remove("show"), 3000);
+        }
+
+        // Register service worker for PWA installability
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/add/sw.js");
+        }
+
+        // Handle Web Share Target (URL comes as query param)
+        const params = new URLSearchParams(location.search);
+        const sharedUrl = params.get("url") || params.get("text");
+        if (sharedUrl) {
+            urlInput.value = sharedUrl;
+            const id = extractId(sharedUrl);
+            if (id) fetchVideoInfo(id);
+        }
+    </script>
+</body>
+</html>

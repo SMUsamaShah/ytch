@@ -1,0 +1,19 @@
+{
+  "name": "Add to YTCH",
+  "short_name": "Add to YTCH",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "start_url": "/add/",
+  "icons": [
+    { "src": "../favicon/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ],
+  "share_target": {
+    "action": "/add/",
+    "method": "GET",
+    "params": {
+      "url": "url",
+      "text": "text"
+    }
+  }
+}

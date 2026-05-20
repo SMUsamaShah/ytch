@@ -1,3 +1,8 @@
+// ── Config ────────────────────────────────────────────────────────────────────
+// Replace with the raw URL to your pool.json Gist file
+const POOL_GIST_URL = "https://gist.githubusercontent.com/SMUsamaShah/63a62ae38897f7e1691c78811470e97a/raw/pool.json";
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 let staticNoise = document.querySelector(".static-noise");
 let smpte = document.querySelector(".smpte");
 let channelName = document.querySelector(".channel-name");
@@ -11,12 +16,20 @@ let guide = document.querySelector(".guide");
 let videoIdElement = document.querySelector(".videoIdElement .text");
 let volumeSteps = document.querySelector(".volume-steps .steps");
 let volumeStepsContainer = document.querySelector(".volume-steps");
-let player, playingNow, playingNowOrder, startAt, vids, volume;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let player, playingNow, volume;
 let channelNumber = 1;
 let volumeFadeoutTimer, channelNameFadeoutTimer, controllerFadeoutTimer, numberInputTimer;
 let isMin = false, isMuted = true, isOn = true, showInfo = false, showGuide = false, isControlSwipe = false;
 let touchStartX, touchStartY, touchMoveX, touchMoveY, controlCurrPos = 0, distanceMoved, channelNumberInput = "", lastChannelNumber;
 
+let pool = {};
+let currentPlaylist = [];
+let currentPlaylistIdx = 0;
+let currentSlotName = "all";
+
+// ── Persistence ───────────────────────────────────────────────────────────────
 if (localStorage.getItem("storedChannelNumber") === null) {
     channelNumber = 1;
     localStorage.setItem("storedChannelNumber", channelNumber);
@@ -38,96 +51,132 @@ if (localStorage.getItem("storedVolume") === null) {
     volume = Number(localStorage.getItem("storedVolume"));
 }
 
-document.body.addEventListener("touchend", function () {
-    control.style.opacity = 1;
-    clearTimeout(controllerFadeoutTimer);
-});
-
-document.body.addEventListener("mousemove", function (e) {
-    if (isMin) {
-        control.style.opacity = 1;
-        clearTimeout(controllerFadeoutTimer);
-        controllerFadeoutTimer = setTimeout(() => {
-            control.style.opacity = 0;
-        }, 3000);
-    }
-    controlSwipeMove(e.clientX, e.clientY);
-});
-
-control.addEventListener("touchstart", (e) => {
-    controlSwipeDown(e.touches[0].clientX, e.touches[0].clientY);
-});
-
-control.addEventListener("mousedown", (e) => {
-    controlSwipeDown(e.clientX, e.clientY);
-});
-
-document.addEventListener("touchmove", (e) => {
-    controlSwipeMove(e.touches[0].clientX, e.touches[0].clientY);
-});
-
-document.addEventListener("touchend", (e) => {
-    controlSwipeEnd();
-});
-
-document.addEventListener("mouseup", (e) => {
-    controlSwipeEnd();
-});
-
-function controlSwipeDown(x, y) {
-    if (!isMin) isControlSwipe = true;
-    touchStartX = x;
-    touchStartY = y;
-}
-
-function controlSwipeMove(x, y) {
-    if (isControlSwipe) {
-        touchMoveX = x;
-        touchMoveY = y;
-        distanceMoved = (touchMoveX - touchStartX);
-        t = distanceMoved + controlCurrPos;
-        if (t > 10) t = 10;
-        if (t < - control.offsetWidth - 10) t = - control.offsetWidth - 10;
-        controlT1.style.transform = "translateX(" + t + "px)";
-        controlT2.style.transform = "translateX(" + t + "px)";
-    }
-}
-
-function controlSwipeEnd() {
-    if (distanceMoved > 20) controlCurrPos = 0;
-    if (distanceMoved < -20) controlCurrPos = - control.offsetWidth;
-    controlT1.style.transform = "translateX(" + controlCurrPos + "px)";
-    controlT2.style.transform = "translateX(" + controlCurrPos + "px)";
-    isControlSwipe = false;
-}
-
-function resizePlayer() {
-    let p = document.querySelector("#player");
-    p.style.top = - window.innerHeight * 0.5 + "px";
-    p.style.left = (window.innerWidth - Math.min(window.innerHeight * 1.777, window.innerWidth)) / 2 + "px";
-    player.setSize(Math.min(window.innerHeight * 1.777, window.innerWidth), window.innerHeight * 2);
-}
-
-function getList() {
-    vids = {};
-    let xhttp = new XMLHttpRequest();
-    xhttp.onreadystatechange = function () {
-        if (this.readyState == 4 && this.status == 200) {
-            r = JSON.parse(this.responseText);
-            vids = r;
-            playChannel(channelNumber, false);
-        }
+// ── Scheduling helpers ────────────────────────────────────────────────────────
+function mulberry32(seed) {
+    return function () {
+        seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
-    // xhttp.open("GET", "list.json?t=" + Date.now());
-    xhttp.open("GET", "https://gist.githubusercontent.com/SMUsamaShah/63a62ae38897f7e1691c78811470e97a/raw/list.json?t=" + Date.now());
-    xhttp.send();
+}
+
+function seededShuffle(arr, seed) {
+    const rng = mulberry32(seed);
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+function strToSeed(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = Math.imul(31, h) + s.charCodeAt(i) | 0;
+    return h;
+}
+
+function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function getCurrentSlot(ch) {
+    if (!pool[ch] || !pool[ch].slots) return null;
+    const now = new Date();
+    const hhmm = now.getHours() * 60 + now.getMinutes();
+    for (const slot of pool[ch].slots) {
+        const [sh, sm] = slot.start.split(":").map(Number);
+        const [eh, em] = slot.end.split(":").map(Number);
+        if (hhmm >= sh * 60 + sm && hhmm < eh * 60 + em) return slot;
+    }
+    return null;
+}
+
+function getDailyPlaylist(ch, slot) {
+    if (!pool[ch] || !pool[ch].pool) return [];
+    let videos = pool[ch].pool;
+    if (slot && (slot.minDuration !== null || slot.maxDuration !== null)) {
+        const filtered = videos.filter(v => {
+            if (slot.minDuration !== null && v.duration < slot.minDuration) return false;
+            if (slot.maxDuration !== null && v.duration > slot.maxDuration) return false;
+            return true;
+        });
+        if (filtered.length > 0) videos = filtered;
+    }
+    if (videos.length === 0) return [];
+    const slotName = slot ? slot.name : "all";
+    return seededShuffle(videos, strToSeed(`${todayStr()}-${ch}-${slotName}`));
+}
+
+function getPlaylistIdx(ch, slotName) {
+    return Number(localStorage.getItem(`pl_${ch}_${slotName}`) || 0);
+}
+
+function savePlaylistIdx(ch, slotName, idx) {
+    localStorage.setItem(`pl_${ch}_${slotName}`, idx);
+}
+
+// ── Pool loading ──────────────────────────────────────────────────────────────
+function loadPool() {
+    fetch(POOL_GIST_URL + "?t=" + Date.now())
+        .then(r => r.json())
+        .then(data => {
+            pool = data;
+            playChannel(channelNumber, false);
+        })
+        .catch(() => {
+            smpte.style.opacity = 1;
+        });
+}
+
+// ── Playback ──────────────────────────────────────────────────────────────────
+function startChannel(ch) {
+    if (!pool[ch]) { smpte.style.opacity = 1; return; }
+    const slot = getCurrentSlot(ch);
+    if (!slot && pool[ch].slots && pool[ch].slots.length > 0) {
+        // Outside all slot windows for this channel
+        smpte.style.opacity = 1;
+        return;
+    }
+    currentSlotName = slot ? slot.name : "all";
+    currentPlaylist = getDailyPlaylist(ch, slot);
+    currentPlaylistIdx = getPlaylistIdx(ch, currentSlotName);
+    if (currentPlaylistIdx >= currentPlaylist.length) currentPlaylistIdx = 0;
+    if (currentPlaylist.length === 0) { smpte.style.opacity = 1; return; }
+    smpte.style.opacity = 0;
+    playingNow = currentPlaylist[currentPlaylistIdx].id;
+    player.loadVideoById(playingNow);
+    player.setVolume(volume);
+    player.setPlaybackRate(1);
+}
+
+function advancePlaylist() {
+    currentPlaylistIdx = (currentPlaylistIdx + 1) % currentPlaylist.length;
+    savePlaylistIdx(channelNumber, currentSlotName, currentPlaylistIdx);
+    // Re-check slot in case time boundary crossed
+    const slot = getCurrentSlot(channelNumber);
+    const slotName = slot ? slot.name : "all";
+    if (slotName !== currentSlotName) {
+        currentSlotName = slotName;
+        currentPlaylist = getDailyPlaylist(channelNumber, slot);
+        currentPlaylistIdx = getPlaylistIdx(channelNumber, currentSlotName);
+        if (currentPlaylistIdx >= currentPlaylist.length) currentPlaylistIdx = 0;
+    }
+    if (currentPlaylist.length === 0) { smpte.style.opacity = 1; return; }
+    playingNow = currentPlaylist[currentPlaylistIdx].id;
+    player.loadVideoById(playingNow);
+    player.setVolume(volume);
+    player.setPlaybackRate(1);
 }
 
 function playChannel(ch, s) {
     clearTimeout(channelNameFadeoutTimer);
-    if (ch > 0 && ch < Object.keys(vids).length + 1) {
+    const channelCount = Object.keys(pool).length || 19;
+    if (ch > 0 && (Object.keys(pool).length === 0 || ch <= channelCount)) {
         if (localStorage.getItem("storedChannelNumber") != ch) {
-            (ch < 10) ? channelName.textContent = "CH 0" + ch : channelName.textContent = "CH " + ch;
+            channelName.textContent = ch < 10 ? "CH 0" + ch : "CH " + ch;
             channelName.style.opacity = 1;
             lastChannelNumber = channelNumber;
             channelNumber = ch;
@@ -136,37 +185,20 @@ function playChannel(ch, s) {
         }
         control.style.display = "flex";
         smpte.style.opacity = 0;
-        if (sync(ch)) {
-            player.loadVideoById(playingNow, startAt);
-            player.setVolume(volume);
-            player.setPlaybackRate(1);
+        if (Object.keys(pool).length > 0) {
+            startChannel(ch);
         } else if (s) {
-            getList();
+            loadPool();
         } else {
             smpte.style.opacity = 1;
         }
     } else {
         channelName.textContent = "INVALID";
-        channelNameFadeoutTimer = setTimeout(() => {
-            channelName.style.opacity = 0;
-        }, 3000);
+        channelNameFadeoutTimer = setTimeout(() => { channelName.style.opacity = 0; }, 3000);
     }
 }
 
-function sync(ch) {
-    playingNow = 0;
-    let t = Math.floor(Date.now() / 1000);
-    for (let i in vids[ch]) {
-        if (t >= vids[ch][i].playAt && t < vids[ch][i].playAt + vids[ch][i].duration) {
-            playingNowOrder = i;
-            playingNow = vids[ch][i].id;
-            startAt = t - vids[ch][i].playAt;
-            return true;
-        }
-    }
-    return false;
-}
-
+// ── YouTube IFrame API ────────────────────────────────────────────────────────
 var scriptUrl = 'https:\/\/www.youtube.com\/s\/player\/d2e656ee\/www-widgetapi.vflset\/www-widgetapi.js'; try { var ttPolicy = window.trustedTypes.createPolicy("youtube-widget-api", { createScriptURL: function (x) { return x } }); scriptUrl = ttPolicy.createScriptURL(scriptUrl) } catch (e) { } var YT; if (!window["YT"]) YT = { loading: 0, loaded: 0 }; var YTConfig; if (!window["YTConfig"]) YTConfig = { "host": "https://www.youtube.com" };
 if (!YT.loading) {
     YT.loading = 1; (function () {
@@ -200,17 +232,17 @@ function onYouTubeIframeAPIReady() {
         }
     });
     resizePlayer();
-    window.addEventListener('resize', function (event) {
-        resizePlayer();
-    }, true);
+    window.addEventListener('resize', function () { resizePlayer(); }, true);
 }
 
 function onErrorOccured(event) {
     console.error(event.data);
+    // Skip broken videos
+    if (currentPlaylist.length > 0) advancePlaylist();
 }
 
 function onPlayerReady(event) {
-    getList();
+    loadPool();
     control.style.display = "flex";
     if (localStorage.getItem("controlAnimate") === null) {
         controlT1.style.animation = "2s swipeControl";
@@ -234,46 +266,22 @@ function onPlayerReady(event) {
             toggleControl();
         else if (e.key === "Enter")
             goToChannel();
-        // else if (e.key === "i" || e.key === "I") 
-            // toggleInfo();
         else if (e.key === "f" || e.key === "F")
             toggleFullScreen();
-        else if (e.key === "0" || e.key === "1" || e.key === "2" || e.key === "3" || e.key === "4" || e.key === "5" || e.key === "6" || e.key === "7" || e.key === "8" || e.key === "9")
+        else if ("0123456789".includes(e.key))
             numberInput(e.key);
     });
 }
 
 function onPlayerStateChange(event) {
     staticNoise.style.opacity = 1;
-
     if (event.data == -1) {
         videoIdElement.innerHTML = "UNSTARTED";
     } else if (event.data == 0) {
         videoIdElement.innerHTML = "ENDED";
-        if (Object.keys(vids[channelNumber]).length == playingNowOrder) {
-            getList();
-        } else {
-            playChannel(channelNumber, false);
-        }
+        advancePlaylist();
     } else if (event.data == 1) {
-        // PLAYING
-        let _startAt = startAt;
-        let _playingNow = playingNow;
-        let _playingNowOrder = playingNowOrder;
-        if (sync(channelNumber)) {
-            if (_playingNow == playingNow && _playingNowOrder == playingNowOrder) {
-                if (Math.abs(_startAt - startAt) > 10) {
-                    player.seekTo(startAt);
-                }
-            } else {
-                player.loadVideoById(playingNow, startAt);
-            }
-        } else {
-            getList();
-        }
-        channelNameFadeoutTimer = setTimeout(() => {
-            channelName.style.opacity = 0;
-        }, 3000);
+        channelNameFadeoutTimer = setTimeout(() => { channelName.style.opacity = 0; }, 3000);
         staticNoise.style.opacity = 0;
         videoIdElement.innerHTML = playingNow;
     } else if (event.data == 2) {
@@ -289,6 +297,61 @@ function onAutoplayBlocked() {
     console.log("Autoplay blocked!");
 }
 
+// ── Controls ──────────────────────────────────────────────────────────────────
+function resizePlayer() {
+    let p = document.querySelector("#player");
+    p.style.top = - window.innerHeight * 0.5 + "px";
+    p.style.left = (window.innerWidth - Math.min(window.innerHeight * 1.777, window.innerWidth)) / 2 + "px";
+    player.setSize(Math.min(window.innerHeight * 1.777, window.innerWidth), window.innerHeight * 2);
+}
+
+document.body.addEventListener("touchend", function () {
+    control.style.opacity = 1;
+    clearTimeout(controllerFadeoutTimer);
+});
+
+document.body.addEventListener("mousemove", function (e) {
+    if (isMin) {
+        control.style.opacity = 1;
+        clearTimeout(controllerFadeoutTimer);
+        controllerFadeoutTimer = setTimeout(() => { control.style.opacity = 0; }, 3000);
+    }
+    controlSwipeMove(e.clientX, e.clientY);
+});
+
+control.addEventListener("touchstart", (e) => { controlSwipeDown(e.touches[0].clientX, e.touches[0].clientY); });
+control.addEventListener("mousedown", (e) => { controlSwipeDown(e.clientX, e.clientY); });
+document.addEventListener("touchmove", (e) => { controlSwipeMove(e.touches[0].clientX, e.touches[0].clientY); });
+document.addEventListener("touchend", () => { controlSwipeEnd(); });
+document.addEventListener("mouseup", () => { controlSwipeEnd(); });
+
+function controlSwipeDown(x, y) {
+    if (!isMin) isControlSwipe = true;
+    touchStartX = x;
+    touchStartY = y;
+}
+
+function controlSwipeMove(x, y) {
+    if (isControlSwipe) {
+        touchMoveX = x;
+        touchMoveY = y;
+        distanceMoved = (touchMoveX - touchStartX);
+        let t = distanceMoved + controlCurrPos;
+        if (t > 10) t = 10;
+        if (t < -control.offsetWidth - 10) t = -control.offsetWidth - 10;
+        controlT1.style.transform = "translateX(" + t + "px)";
+        controlT2.style.transform = "translateX(" + t + "px)";
+    }
+}
+
+function controlSwipeEnd() {
+    if (distanceMoved > 20) controlCurrPos = 0;
+    if (distanceMoved < -20) controlCurrPos = -control.offsetWidth;
+    controlT1.style.transform = "translateX(" + controlCurrPos + "px)";
+    controlT2.style.transform = "translateX(" + controlCurrPos + "px)";
+    isControlSwipe = false;
+}
+
 function toggleMute() {
     if (isOn) {
         if (player.isMuted()) {
@@ -298,9 +361,7 @@ function toggleMute() {
             if (volume == 0) volume = 5;
             localStorage.setItem("storedVolume", volume);
             volumeSteps.innerHTML = "";
-            for (let i = 0; i < volume; i += 5) {
-                volumeSteps.innerHTML += '<div class="step"></div>';
-            }
+            for (let i = 0; i < volume; i += 5) volumeSteps.innerHTML += '<div class="step"></div>';
         } else {
             muteIcon.src = "icons/volume-x.svg";
             player.mute();
@@ -312,14 +373,11 @@ function toggleMute() {
 
 function switchChannel(a) {
     if (isOn) {
-        let newChannelNumber = channelNumber + a;
-        if (newChannelNumber < 1) {
-            newChannelNumber = Object.keys(vids).length;
-        }
-        if (newChannelNumber > Object.keys(vids).length) {
-            newChannelNumber = 1;
-        }
-        playChannel(Number(newChannelNumber), true);
+        const count = Object.keys(pool).length || 19;
+        let n = channelNumber + a;
+        if (n < 1) n = count;
+        if (n > count) n = 1;
+        playChannel(Number(n), true);
     }
 }
 
@@ -343,12 +401,9 @@ function toggleControl() {
         controlT2.style.display = "none";
         isMin = true;
         w.forEach(e => { e.style.margin = "0"; });
-        controllerFadeoutTimer = setTimeout(() => {
-            control.style.opacity = 0;
-        }, 3000);
+        controllerFadeoutTimer = setTimeout(() => { control.style.opacity = 0; }, 3000);
     }
 }
-
 
 function togglePower() {
     if (isOn) {
@@ -361,77 +416,42 @@ function togglePower() {
         playChannel(channelNumber, true);
     }
 }
+
 function toggleInfo() {
-    if (showInfo) {
-        showInfo = false;
-        info.style.display = "none";
-    } else {
-        showInfo = true;
-        info.style.display = "flex";
-    }
+    if (showInfo) { showInfo = false; info.style.display = "none"; }
+    else { showInfo = true; info.style.display = "flex"; }
 }
 
 function toggleGuide() {
-    if (showGuide) {
-        showGuide = false;
-        guide.style.display = "none";
-    } else {
-        showGuide = true;
-        guide.style.display = "flex";
-    }
+    if (showGuide) { showGuide = false; guide.style.display = "none"; }
+    else { showGuide = true; guide.style.display = "flex"; }
 }
-
 
 function changeVolume(d) {
     if (isOn) {
         volumeStepsContainer.style.opacity = 1;
         clearTimeout(volumeFadeoutTimer);
         volume += d;
-        if (volume > 0) {
-            player.unMute();
-            isMuted = false;
-            muteIcon.src = "icons/volume-2.svg";
-        }
-        if (volume >= 100) {
-            volume = 100;
-        }
-        if (volume <= 0) {
-            volume = 0;
-            muteIcon.src = "icons/volume-x.svg";
-            player.mute();
-            isMuted = true;
-        }
+        if (volume > 0) { player.unMute(); isMuted = false; muteIcon.src = "icons/volume-2.svg"; }
+        if (volume >= 100) volume = 100;
+        if (volume <= 0) { volume = 0; muteIcon.src = "icons/volume-x.svg"; player.mute(); isMuted = true; }
         localStorage.setItem("storedVolume", volume);
         player.setVolume(volume);
         volumeSteps.innerHTML = "";
-        for (let i = 0; i < volume; i += 5) {
-            volumeSteps.innerHTML += '<div class="step"></div>';
-        }
-        volumeFadeoutTimer = setTimeout(() => {
-            volumeStepsContainer.style.opacity = 0;
-        }, 3000);
+        for (let i = 0; i < volume; i += 5) volumeSteps.innerHTML += '<div class="step"></div>';
+        volumeFadeoutTimer = setTimeout(() => { volumeStepsContainer.style.opacity = 0; }, 3000);
     }
 }
 
 function toggleFullScreen() {
-    let elem = document.body;
-    if (document.fullscreenElement) {
-        document.exitFullscreen();
-    } else {
-        elem.requestFullscreen();
-    }
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.body.requestFullscreen();
 }
 
-document.body.addEventListener("fullscreenchange", fullScreenChanged);
-function fullScreenChanged() {
+document.body.addEventListener("fullscreenchange", function () {
     let fullScreenIcon = document.querySelector(".control .full-screen-icon");
-    if (document.fullscreenElement) {
-        fullScreenIcon.src = "icons/minimize.svg";
-    } else {
-        fullScreenIcon.src = "icons/maximize.svg";
-    }
-
-}
+    fullScreenIcon.src = document.fullscreenElement ? "icons/minimize.svg" : "icons/maximize.svg";
+});
 
 function numberInput(n) {
     if (isOn) {
@@ -448,9 +468,7 @@ function numberInput(n) {
 }
 
 function recallChannel() {
-    if (isOn && lastChannelNumber != channelNumber) {
-        playChannel(Number(lastChannelNumber), true);
-    }
+    if (isOn && lastChannelNumber != channelNumber) playChannel(Number(lastChannelNumber), true);
 }
 
 function goToChannel() {
